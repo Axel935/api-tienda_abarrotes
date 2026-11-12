@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tienda de Abarrotes - Panel de pruebas</title>
+<style>
+  body{font-family:system-ui,sans-serif;margin:0;background:#f4f5f7;color:#222}
+  header{background:#2b6a4b;color:#fff;padding:12px 20px;display:flex;justify-content:space-between;align-items:center}
+  main{max-width:1000px;margin:20px auto;padding:0 16px;display:grid;gap:16px}
+  section{background:#fff;border-radius:8px;padding:16px;box-shadow:0 1px 3px #0002}
+  h2{margin:0 0 10px;font-size:1.1rem}
+  table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:6px;border-bottom:1px solid #eee;font-size:.9rem}
+  input,select,button{padding:7px;margin:2px;font-size:.9rem}
+  button{background:#2b6a4b;color:#fff;border:0;border-radius:4px;cursor:pointer}
+  button.sec{background:#777}
+  .msg{padding:8px;border-radius:4px;margin-top:8px}.ok{background:#dff5e6}.err{background:#fde0e0}
+  .hidden{display:none}.low{color:#b00020;font-weight:bold}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}@media(max-width:700px){.grid2{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header><strong>Tienda de Abarrotes</strong><span id="who"></span></header>
+<main>
+  <section id="loginBox">
+    <h2>Iniciar sesión</h2>
+    <input id="user" placeholder="Usuario" value="admin">
+    <input id="pass" type="password" placeholder="Contraseña" value="Admin12345">
+    <button onclick="login()">Entrar</button>
+    <div id="loginMsg"></div>
+  </section>
+
+  <div id="panel" class="hidden" style="display:grid;gap:16px">
+    <div class="grid2">
+      <section>
+        <h2>Productos</h2>
+        <input id="buscar" placeholder="Buscar..." oninput="cargarProductos()">
+        <table><thead><tr><th>Código</th><th>Nombre</th><th>Precio</th><th>Stock</th><th></th></tr></thead>
+        <tbody id="productos"></tbody></table>
+      </section>
+      <section>
+        <h2>Nueva venta</h2>
+        <table><thead><tr><th>Producto</th><th>Cant.</th><th>Subtotal</th><th></th></tr></thead>
+        <tbody id="carrito"></tbody></table>
+        <p><strong>Total: $<span id="total">0.00</span></strong></p>
+        <select id="pago"><option value="efectivo">Efectivo</option><option value="tarjeta">Tarjeta</option></select>
+        <button onclick="cobrar()">Cobrar</button>
+        <button class="sec" onclick="carrito=[];pintarCarrito()">Vaciar</button>
+        <div id="ventaMsg"></div>
+      </section>
+    </div>
+
+    <section id="adminBox" class="hidden">
+      <h2>Alta de producto (solo administrador)</h2>
+      <input id="p_codigo" placeholder="Código"><input id="p_nombre" placeholder="Nombre">
+      <input id="p_compra" type="number" step="0.01" placeholder="P. compra">
+      <input id="p_venta" type="number" step="0.01" placeholder="P. venta">
+      <input id="p_stock" type="number" placeholder="Stock inicial" value="0">
+      <button onclick="crearProducto()">Guardar</button>
+      <div id="prodMsg"></div>
+    </section>
+
+    <section>
+      <h2>Últimas ventas</h2>
+      <table><thead><tr><th>#</th><th>Fecha</th><th>Total</th><th>Pago</th><th>Estado</th><th></th></tr></thead>
+      <tbody id="ventas"></tbody></table>
+    </section>
+  </div>
+</main>
+
+<script>
+const API = location.origin;           // el frontend se sirve desde la misma API
+let token = null, me = null, carrito = [], catalogo = [];
+
+async function api(path, opts = {}) {
+  const headers = {...(opts.headers || {})};
+  if (token) headers.Authorization = "Bearer " + token;
+  if (opts.json) { headers["Content-Type"] = "application/json"; opts.body = JSON.stringify(opts.json); }
+  const r = await fetch(API + path, {...opts, headers});
+  if (r.status === 204) return null;
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    const d = data.detail;
+    throw new Error(Array.isArray(d) ? d.map(e => e.loc.slice(1).join(".") + ": " + e.msg).join("; ") : d || r.statusText);
+  }
+  return data;
+}
+function msg(id, text, ok) { document.getElementById(id).innerHTML = `<div class="msg ${ok ? "ok" : "err"}">${text}</div>`; }
+const money = n => Number(n).toFixed(2);
+
+async function login() {
+  try {
+    const body = new URLSearchParams({username: user.value, password: pass.value});
+    const t = await api("/auth/login", {method: "POST", body});
+    token = t.access_token;
+    me = await api("/auth/me");
+    who.textContent = `${me.nombre} (${me.rol})`;
+    loginBox.classList.add("hidden"); panel.classList.remove("hidden");
+    if (me.rol === "admin") adminBox.classList.remove("hidden");
+    await Promise.all([cargarProductos(), cargarVentas()]);
+  } catch (e) { msg("loginMsg", e.message, false); }
+}
+
+async function cargarProductos() {
+  catalogo = await api("/productos?buscar=" + encodeURIComponent(buscar.value || ""));
+  productos.innerHTML = catalogo.map(p => `<tr><td>${p.codigo}</td><td>${p.nombre}</td>
+    <td>$${money(p.precio_venta)}</td><td class="${p.stock <= p.stock_minimo ? "low" : ""}">${p.stock}</td>
+    <td><button onclick="agregar(${p.id})">+</button></td></tr>`).join("");
+}
+function agregar(id) {
+  const it = carrito.find(c => c.id === id);
+  it ? it.cantidad++ : carrito.push({id, cantidad: 1});
+  pintarCarrito();
+}
+function quitar(id) { carrito = carrito.filter(c => c.id !== id); pintarCarrito(); }
+function pintarCarrito() {
+  let tot = 0;
+  const carrito_el = document.getElementById("carrito");
+  carrito_el.innerHTML = carrito.map(c => {
+    const p = catalogo.find(x => x.id === c.id); const sub = p.precio_venta * c.cantidad; tot += sub;
+    return `<tr><td>${p.nombre}</td><td><input type="number" min="1" value="${c.cantidad}" style="width:55px"
+      onchange="c_(${c.id},this.value)"></td><td>$${money(sub)}</td><td><button class="sec" onclick="quitar(${c.id})">x</button></td></tr>`;
+  }).join("");
+  total.textContent = money(tot);
+}
+function c_(id, v) { carrito.find(c => c.id === id).cantidad = parseInt(v) || 1; pintarCarrito(); }
+
+async function cobrar() {
+  try {
+    const v = await api("/ventas", {method: "POST", json: {
+      metodo_pago: pago.value, items: carrito.map(c => ({producto_id: c.id, cantidad: c.cantidad}))}});
+    msg("ventaMsg", `Venta #${v.id} registrada. Total: $${money(v.total)}`, true);
+    carrito = []; pintarCarrito(); await Promise.all([cargarProductos(), cargarVentas()]);
+  } catch (e) { msg("ventaMsg", e.message, false); }
+}
+async function crearProducto() {
+  try {
+    const p = await api("/productos", {method: "POST", json: {
+      codigo: p_codigo.value, nombre: p_nombre.value, precio_compra: p_compra.value,
+      precio_venta: p_venta.value, stock: parseInt(p_stock.value) || 0}});
+    msg("prodMsg", `Producto "${p.nombre}" creado`, true); cargarProductos();
+  } catch (e) { msg("prodMsg", e.message, false); }
+}
+async function cargarVentas() {
+  const vs = await api("/ventas?limit=10");
+  ventas.innerHTML = vs.map(v => `<tr><td>${v.id}</td><td>${new Date(v.fecha + "Z").toLocaleString()}</td>
+    <td>$${money(v.total)}</td><td>${v.metodo_pago}</td><td>${v.estado}</td>
+    <td>${me.rol === "admin" && v.estado === "COMPLETADA" ? `<button class="sec" onclick="cancelar(${v.id})">Cancelar</button>` : ""}</td></tr>`).join("");
+}
+async function cancelar(id) {
+  try { await api(`/ventas/${id}/cancelar`, {method: "POST"}); await Promise.all([cargarProductos(), cargarVentas()]); }
+  catch (e) { msg("ventaMsg", e.message, false); }
+}
+</script>
+</body>
+</html>
